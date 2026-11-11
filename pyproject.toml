@@ -17,6 +17,11 @@ classifiers = [
 ]
 dependencies = []
 
+[project.urls]
+Source = "https://github.com/AllanJinYosoro/PyGPUScheduling"
+Issues = "https://github.com/AllanJinYosoro/PyGPUScheduling/issues"
+Changelog = "https://github.com/AllanJinYosoro/PyGPUScheduling/blob/main/CHANGELOG.md"
+
 [project.optional-dependencies]
 progress = ["tqdm>=4.66"]
 

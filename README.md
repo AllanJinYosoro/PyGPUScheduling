@@ -2,7 +2,7 @@
 
 单机 CPU 与 NVIDIA GPU 任务调度库。业务注册任务、依赖和生命周期处理器，调度器管理资源准入、子进程、重试及恢复。运行时仅依赖 Python 标准库，交互式进度条可选安装 `tqdm`。
 
-仓库名为 `PyGPUScheduling`，分发包名为 `pygpu-scheduling`，Python 导入名为 `task_scheduling`。当前版本为 `0.1.0`，首次公开发布的准备状态见[维护与发布指南](docs/maintaining.md#当前交接状态)。
+分发包名为 `pygpu-scheduling`，Python 导入名为 `task_scheduling`。发布状态见[维护指南](https://github.com/AllanJinYosoro/PyGPUScheduling/blob/main/docs/maintaining.md#当前交接状态)。
 
 ## 环境与安装
 
@@ -22,19 +22,13 @@ uv run python examples/basic.py
 uv sync --locked --extra progress
 ```
 
-首次发布到 PyPI 后，其他项目可添加依赖：
+在其他项目中安装：
 
 ```bash
 uv add "pygpu-scheduling>=0.1.0,<0.2.0"
 ```
 
-发布前可从本地 checkout 接入：
-
-```bash
-uv add --editable ../PyGPUScheduling
-```
-
-GitHub 固定 tag 接入及升级方式见[维护指南](docs/maintaining.md#业务仓库接入)。
+GitHub 固定 tag 接入及本地联调方式见[维护指南](https://github.com/AllanJinYosoro/PyGPUScheduling/blob/main/docs/maintaining.md#业务仓库接入)。
 
 ## 注册任务
 
@@ -65,14 +59,14 @@ GPU 任务通过 `resources=ResourceRequest("cuda", 4096)` 声明 4096 MiB 预�
 - 注册 `prepare`、`assess`、`commit`、`recover`，由业务提供校验及产物流程。
 - 持久化任务状态，完成事件按至少一次语义重放。
 
-当前提供单机本地子进程执行，不包含多机、抢占或单任务多卡调度。预算账本属于单个调度实例；跨实例不会合并预算。更完整的约束见[API 与恢复协议](docs/api.md)。
+当前提供单机本地子进程执行，不包含多机、抢占或单任务多卡调度。预算账本属于单个调度实例；跨实例不会合并预算。更完整的约束见[API 与恢复协议](https://github.com/AllanJinYosoro/PyGPUScheduling/blob/main/docs/api.md)。
 
 ## 文档与示例
 
-- [API、调度策略和恢复协议](docs/api.md)
-- [开发、版本管理、GitHub 与 PyPI 发布](docs/maintaining.md)
-- [变更记录](CHANGELOG.md)
-- [依赖顺序示例](examples/basic.py)
-- [业务产物处理示例](examples/artifacts.py)
+- [API、调度策略和恢复协议](https://github.com/AllanJinYosoro/PyGPUScheduling/blob/main/docs/api.md)
+- [开发与发布](https://github.com/AllanJinYosoro/PyGPUScheduling/blob/main/docs/maintaining.md)
+- [变更记录](https://github.com/AllanJinYosoro/PyGPUScheduling/blob/main/CHANGELOG.md)
+- [依赖顺序示例](https://github.com/AllanJinYosoro/PyGPUScheduling/blob/main/examples/basic.py)
+- [业务产物处理示例](https://github.com/AllanJinYosoro/PyGPUScheduling/blob/main/examples/artifacts.py)
 
-采用 [MIT 许可证](LICENSE)。
+采用 [MIT 许可证](https://github.com/AllanJinYosoro/PyGPUScheduling/blob/main/LICENSE)。

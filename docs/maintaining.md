@@ -78,8 +78,8 @@ uv add git+https://github.com/AllanJinYosoro/PyGPUScheduling.git --tag v0.1.0
 
 ## 当前交接状态
 
-- 正在发布 `0.1.0`；初始核心来源记录在 `CHANGELOG.md`。
-- GitHub 初始提交 `da3ad57` 的 Python 3.11–3.14 及安装包 [CI 已通过](https://github.com/AllanJinYosoro/PyGPUScheduling/actions/runs/42968843208)，远程尚无 tag；发布准备改动仍需推送并确认对应 CI。
-- 本地项目检查、版本检查、Python 3.11 下 29 项测试、两个示例、构建及 wheel/sdist 独立安装冒烟测试通过。
-- GitHub 登录和仓库管理权限已核验；账号所有者已确认添加 PyPI Pending Publisher，等待首次 OIDC 上传验证。
+- `0.1.0` 已于 2026-11-11 发布：[PyPI](https://pypi.org/project/pygpu-scheduling/0.1.0/)、[GitHub Release](https://github.com/AllanJinYosoro/PyGPUScheduling/releases/tag/v0.1.0)。tag 固定于 `26f770f`；初始核心来源见 `CHANGELOG.md`。
+- 发布提交的 Python 3.11–3.14 及安装包 [CI 已通过](https://github.com/AllanJinYosoro/PyGPUScheduling/actions/runs/42970852316)，[OIDC 发布成功](https://github.com/AllanJinYosoro/PyGPUScheduling/actions/runs/42970989855)。`pypi` environment 仅允许 `v*` tag，Trusted Publisher 已经实际上传验证，后续无需重建 Pending Publisher。
+- 本地 29 项测试、项目与版本检查、两个示例、wheel/sdist 独立安装验证通过；从正式 PyPI 隔离安装的依赖顺序、动态任务和恢复验证通过。PyPI 两个分发文件的 SHA256 均与 CI 产物一致。
+- 发布 job 的 setup-uv 空目录提示及 GitHub Ubuntu 运行器迁移公告均未影响此次结果；后续改动仍写入 `Unreleased`。
 - GPU 实机尚未验证；现有测试覆盖 CPU 子进程和模拟 GPU 行为。下游业务仓库迁移另行处理；本项目不维护独立 Agent 记忆。

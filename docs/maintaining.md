@@ -9,8 +9,8 @@ uv run pytest
 uv run python examples/basic.py
 uv run python examples/artifacts.py
 uv build --no-sources
-uv run --isolated --no-project --with dist/*.whl python scripts/smoke_test.py
-uv run --isolated --no-project --with dist/*.tar.gz python scripts/smoke_test.py
+uv run --isolated --no-project --with dist/pygpu_scheduling-0.2.0-py3-none-any.whl python scripts/smoke_test.py
+uv run --isolated --no-project --with dist/pygpu_scheduling-0.2.0.tar.gz python scripts/smoke_test.py
 ```
 
 `uv.lock` 固定开发及 CI 环境，业务仓库维护自己的锁文件。CI 在 Ubuntu 上测试 Python 3.11–3.14，并单独验证 wheel 和 sdist。`check_project.py` 检查语法、无代码注释、核心导入边界、元数据与文档本地链接；`smoke_test.py` 验证安装包的 CPU 依赖顺序、动态任务、任务级配置和产物失效重算。
@@ -78,6 +78,7 @@ uv add git+https://github.com/AllanJinYosoro/PyGPUScheduling.git --tag v0.2.0
 
 ## 当前交接状态
 
-- 当前开发版本为 `0.2.0`，发布按上文执行；已发布的 `0.1.0` 见 [PyPI](https://pypi.org/project/pygpu-scheduling/0.1.0/)。
-- 新版自动读取状态格式 1 并保存为格式 2，兼容边界见 [API 与恢复协议](api.md#状态与恢复)。
+- `0.2.0` 已于 2026-11-11 发布：[PyPI](https://pypi.org/project/pygpu-scheduling/0.2.0/)、[GitHub Release](https://github.com/AllanJinYosoro/PyGPUScheduling/releases/tag/v0.2.0)。tag 固定于 `3dc9c0d`。
+- 50 项测试、Python 3.11–3.14 [CI](https://github.com/AllanJinYosoro/PyGPUScheduling/actions/runs/42979613982)、[发布](https://github.com/AllanJinYosoro/PyGPUScheduling/actions/runs/42979923381)及正式 PyPI 隔离安装验证通过；两个分发文件的 SHA256 均与 CI 产物一致。
+- 自动读取状态格式 1 并保存为格式 2，兼容边界见 [API 与恢复协议](api.md#状态与恢复)。
 - 测试覆盖真实 CPU 子进程和模拟 GPU，尚未完成 GPU 实机验证。下游业务仓库迁移另行处理。

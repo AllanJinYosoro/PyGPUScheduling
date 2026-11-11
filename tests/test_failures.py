@@ -1,23 +1,9 @@
-import importlib
 from types import SimpleNamespace
 
 import pytest
 
 from task_scheduling import LocalRuntime, ResourceRequest, Scheduler, Scheduling, TaskSpec
 from task_scheduling.gpu import GPU, GPUQueryError
-
-
-@pytest.fixture
-def clock(monkeypatch):
-    current = [0.0]
-    scheduler_module = importlib.import_module("task_scheduling.scheduler")
-
-    def sleep(seconds):
-        current[0] += seconds
-
-    monkeypatch.setattr(scheduler_module, "time", SimpleNamespace(monotonic=lambda: current[0], sleep=sleep))
-    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
-    return current
 
 
 def gpu_task():

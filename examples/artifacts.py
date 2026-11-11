@@ -1,45 +1,38 @@
 from pathlib import Path
 import sys
 
-from task_scheduling import Assessment, Command, CommandHandler, Recovery, Scheduler, TaskSpec
+from task_scheduling import ArtifactHandler, Command, Recovery, Scheduler, TaskSpec
 
 
-class TextArtifactHandler(CommandHandler):
+def valid_text(path, context):
+    return path.is_file() and path.read_text() == context.task.payload["content"]
+
+
+class TextArtifactHandler(ArtifactHandler):
     def prepare(self, context):
         artifact = context.directory / "artifact.txt"
         content = context.task.payload["content"]
         script = f"from pathlib import Path; Path({str(artifact)!r}).write_text({content!r})"
         return Command((sys.executable, "-c", script))
 
-    def assess(self, context, outcome):
-        execution = super().assess(context, outcome)
-        if not execution.success:
-            return execution
-        artifact = context.directory / "artifact.txt"
-        valid = artifact.is_file() and artifact.read_text() == context.task.payload["content"]
-        return Assessment(valid, False, "artifact", "artifact content validation")
-
     def commit(self, context):
         output = Path(context.task.payload["output"])
-        if output.exists():
-            if output.read_text() != context.task.payload["content"]:
-                raise ValueError("Published artifact content changed")
-        else:
+        if not valid_text(output, context):
             output.parent.mkdir(parents=True, exist_ok=True)
             (context.directory / "artifact.txt").replace(output)
         return {"output": str(output)}
 
     def recover(self, context):
+        if context.status == "complete":
+            return super().recover(context)
         output = Path(context.task.payload["output"])
-        if output.exists():
-            if output.read_text() != context.task.payload["content"]:
-                raise ValueError("Published artifact content changed")
+        if valid_text(output, context):
             return Recovery("complete", {"output": str(output)})
-        if context.attempts:
+        if context.current_attempts:
             artifact = context.directory / "artifact.txt"
-            if artifact.is_file() and artifact.read_text() == context.task.payload["content"]:
+            if valid_text(artifact, context):
                 return Recovery("committing")
-        if context.status in {"complete", "committing"}:
+        if context.status == "committing":
             raise ValueError("Completed artifact is missing")
         return None
 
@@ -47,7 +40,10 @@ class TextArtifactHandler(CommandHandler):
 def main():
     root = Path("runs/artifacts").resolve()
     scheduler = Scheduler(root / "queue")
-    scheduler.register_handler("text", TextArtifactHandler())
+    scheduler.register_handler("text", TextArtifactHandler(
+        check_attempt=lambda context: valid_text(context.directory / "artifact.txt", context),
+        check_result=lambda context: valid_text(Path(context.task.payload["output"]), context),
+    ))
     scheduler.submit(TaskSpec("publish-text", "text", payload={
         "content": "Artifact lifecycle completed\n", "output": str(root / "published.txt")
     }))

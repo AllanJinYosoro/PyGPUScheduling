@@ -33,7 +33,7 @@ class StateStore:
         if not self.path.exists():
             return {}
         document = json.loads(self.path.read_text())
-        if document["version"] != 1:
+        if document["version"] not in {1, 2}:
             raise ValueError("Unsupported scheduler state version")
         records = [TaskRecord.from_dict(record) for record in document["tasks"]]
         if len({record.spec.id for record in records}) != len(records):
@@ -43,7 +43,11 @@ class StateStore:
         if any(record.status not in {"pending", "running", "committing", "complete", "failed", "blocked"}
                for record in records):
             raise ValueError("Unknown task status in scheduler state")
+        if any(type(record.revision) is not int or record.revision < 0
+               or any(type(attempt.revision) is not int or not 0 <= attempt.revision <= record.revision
+                      for attempt in record.attempts) for record in records):
+            raise ValueError("Invalid task revision in scheduler state")
         return {record.spec.id: record for record in records}
 
     def save(self, records: dict[str, TaskRecord]) -> None:
-        atomic_json(self.path, {"version": 1, "tasks": [asdict(record) for record in records.values()]})
+        atomic_json(self.path, {"version": 2, "tasks": [asdict(record) for record in records.values()]})

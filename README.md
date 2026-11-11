@@ -25,7 +25,7 @@ uv sync --locked --extra progress
 在其他项目中安装：
 
 ```bash
-uv add "pygpu-scheduling>=0.1.0,<0.2.0"
+uv add "pygpu-scheduling>=0.2.0,<0.3.0"
 ```
 
 GitHub 固定 tag 接入及本地联调方式见[维护指南](https://github.com/AllanJinYosoro/PyGPUScheduling/blob/main/docs/maintaining.md#业务仓库接入)。
@@ -55,8 +55,8 @@ GPU 任务通过 `resources=ResourceRequest("cuda", 4096)` 声明 4096 MiB 预�
 - 静态依赖图与动态追加任务，拒绝缺失依赖、重复定义和依赖环。
 - 按优先级、显存预算和提交顺序选择任务，支持共享或独占 GPU。
 - 启动前预留显存，结合实际进程占用更新预算，保留每卡安全余量。
-- 子进程日志、超时、有限重试、GPU 冷却和故障隔离。
-- 注册 `prepare`、`assess`、`commit`、`recover`，由业务提供校验及产物流程。
+- 子进程日志、队列默认与任务级超时及重试、GPU 冷却和故障隔离。
+- 生命周期处理器与可选产物检查；恢复时自动重算失效任务及其后继。
 - 持久化任务状态，完成事件按至少一次语义重放。
 
 当前提供单机本地子进程执行，不包含多机、抢占或单任务多卡调度。预算账本属于单个调度实例；跨实例不会合并预算。更完整的约束见[API 与恢复协议](https://github.com/AllanJinYosoro/PyGPUScheduling/blob/main/docs/api.md)。

@@ -1,9 +1,9 @@
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Callable, Literal, Protocol
 
-from .policy import integer
+from .policy import ExecutionPolicy, integer
 
 
 TaskStatus = Literal["pending", "running", "committing", "complete", "failed", "blocked"]
@@ -31,6 +31,7 @@ class TaskSpec:
     dependencies: tuple[str, ...] = ()
     priority: int = 0
     resources: ResourceRequest = field(default_factory=ResourceRequest)
+    execution: ExecutionPolicy = field(default_factory=ExecutionPolicy)
 
     def __post_init__(self) -> None:
         if any(not isinstance(value, str) or not value.strip() for value in (self.id, self.handler, self.name)):
@@ -48,6 +49,8 @@ class TaskSpec:
             raise ValueError("Task payload must be a JSON object")
         if not isinstance(self.resources, ResourceRequest):
             raise TypeError("Task resources must be a ResourceRequest")
+        if not isinstance(self.execution, ExecutionPolicy):
+            raise TypeError("Task execution must be an ExecutionPolicy")
         json.dumps(self.payload, allow_nan=False)
 
     def identity(self) -> dict:
@@ -56,7 +59,8 @@ class TaskSpec:
 
     @classmethod
     def from_dict(cls, values: dict) -> "TaskSpec":
-        return cls(**{**values, "resources": ResourceRequest(**values["resources"])})
+        return cls(**{**values, "resources": ResourceRequest(**values["resources"]),
+                      "execution": ExecutionPolicy(**values.get("execution", {}))})
 
 
 @dataclass(frozen=True)
@@ -85,6 +89,7 @@ class Attempt:
     kind: str = ""
     message: str = ""
     retryable: bool = False
+    revision: int = 0
 
 
 @dataclass
@@ -95,9 +100,14 @@ class TaskRecord:
     attempts: list[Attempt] = field(default_factory=list)
     result: dict = field(default_factory=dict)
     acknowledged: dict[str, str] = field(default_factory=dict)
+    revision: int = 0
+
+    @property
+    def current_attempts(self) -> tuple[Attempt, ...]:
+        return tuple(attempt for attempt in self.attempts if attempt.revision == self.revision)
 
     def can_retry(self, max_retries: int) -> bool:
-        failures = [attempt for attempt in self.attempts if attempt.status == "failed"]
+        failures = [attempt for attempt in self.current_attempts if attempt.status == "failed"]
         return all(attempt.retryable for attempt in failures) and len(failures) <= max_retries
 
     @classmethod
@@ -112,14 +122,20 @@ class TaskContext:
     root: Path
     status: TaskStatus
     attempts: tuple[Attempt, ...]
+    result: dict = field(default_factory=dict)
+    revision: int = 0
+
+    @property
+    def current_attempts(self) -> tuple[Attempt, ...]:
+        return tuple(attempt for attempt in self.attempts if attempt.revision == self.revision)
 
     @property
     def directory(self) -> Path:
-        return Path(self.attempts[-1].directory) if self.attempts else self.root
+        return Path(self.current_attempts[-1].directory) if self.current_attempts else self.root
 
     @property
     def gpu(self) -> str | None:
-        return self.attempts[-1].gpu if self.attempts else None
+        return self.current_attempts[-1].gpu if self.current_attempts else None
 
 
 @dataclass(frozen=True)
@@ -163,6 +179,7 @@ class TaskEvent:
     status: TaskStatus
     attempts: tuple[Attempt, ...]
     result: dict
+    revision: int = 0
 
 
 class TaskHandler(Protocol):
@@ -193,5 +210,30 @@ class CommandHandler:
         if context.status == "committing":
             return Recovery("committing")
         if context.status == "complete":
-            return Recovery("complete")
+            return Recovery("complete", context.result)
         return None
+
+
+class ArtifactHandler(CommandHandler):
+    def __init__(self, *, check_attempt: Callable[[TaskContext], bool] | None = None,
+                 check_result: Callable[[TaskContext], bool] | None = None):
+        if any(check is not None and not callable(check) for check in (check_attempt, check_result)):
+            raise TypeError("Artifact checks must be callable")
+        self._check_attempt = check_attempt
+        self._check_result = check_result
+
+    def assess(self, context: TaskContext, outcome: TaskOutcome) -> Assessment:
+        assessment = super().assess(context, outcome)
+        if assessment.success and not self._check(self._check_attempt, context):
+            return Assessment(False, False, "artifact", "Attempt artifacts failed validation")
+        return assessment
+
+    def check_result(self, context: TaskContext) -> bool:
+        return self._check(self._check_result, context)
+
+    @staticmethod
+    def _check(check: Callable[[TaskContext], bool] | None, context: TaskContext) -> bool:
+        valid = True if check is None else check(context)
+        if type(valid) is not bool:
+            raise TypeError("Artifact checks must return a boolean")
+        return valid

@@ -165,9 +165,16 @@ class Scheduler:
 
     def reconcile(self) -> None:
         self._require_session()
-        self._validate_graph({identifier: record.spec for identifier, record in self._records.items()})
-        for record in list(self._records.values()):
+        if self._running:
+            raise RuntimeError("Cannot reconcile while tasks are running")
+        order = self._validate_graph({identifier: record.spec for identifier, record in self._records.items()})
+        self._check_results(order)
+        for identifier in order:
+            record = self._records[identifier]
             if record.spec.id in self._reconciled:
+                continue
+            if record.revision and record.status == "pending" and not record.current_attempts:
+                self._reconciled.add(identifier)
                 continue
             handler = self._handler(record)
             recovery = handler.recover(self._context(record))
@@ -184,11 +191,41 @@ class Scheduler:
                 for attempt in record.attempts:
                     if attempt.status == "running":
                         attempt.status = "interrupted"
-                record.status = "pending" if record.can_retry(self.policy.max_retries) else "failed"
+                record.status = "pending" if record.can_retry(self._policy(record).max_retries) else "failed"
             self._reconciled.add(record.spec.id)
             self._save()
             if record.status == "committing":
                 self._commit(record)
+
+    def _check_results(self, order: tuple[str, ...]) -> None:
+        invalid = set()
+        for identifier in order:
+            record = self._records[identifier]
+            if any(dependency in invalid for dependency in record.spec.dependencies):
+                invalid.add(identifier)
+                continue
+            if identifier in self._reconciled or record.status != "complete":
+                continue
+            check = getattr(self._handler(record), "check_result", None)
+            if check is not None:
+                valid = check(self._context(record))
+                if type(valid) is not bool:
+                    raise TypeError("Result checks must return a boolean")
+                if not valid:
+                    invalid.add(identifier)
+        if not invalid:
+            return
+        for identifier in invalid:
+            record = self._records[identifier]
+            for attempt in record.attempts:
+                if attempt.status == "running":
+                    attempt.status = "interrupted"
+            record.revision += 1
+            record.status = "pending"
+            record.result.clear()
+            record.acknowledged.clear()
+        self._reconciled.update(invalid)
+        self._save()
 
     def run(self) -> tuple[TaskRecord, ...]:
         if self._session is None:
@@ -197,7 +234,7 @@ class Scheduler:
         self.reconcile()
         self._deliver_events()
         deadline = time.monotonic() + self.policy.wait_seconds
-        display_records = [{"status": record.status, "attempts": record.attempts}
+        display_records = [{"status": record.status, "attempts": record.current_attempts}
                            for record in self._records.values()]
         with TaskProgress(display_records, self.policy.max_parallel_tasks, self.policy.max_retries,
                           label=self.label) as progress:
@@ -213,7 +250,7 @@ class Scheduler:
                     if self._pending() and not self._running:
                         self._check_wait(now, deadline)
                     display_records[:] = [{"status": record.status,
-                                           "attempts": record.attempts} for record in self._records.values()]
+                                           "attempts": record.current_attempts} for record in self._records.values()]
                     self._render(progress)
                     if self._has_work():
                         time.sleep(1)
@@ -224,7 +261,7 @@ class Scheduler:
         return self.tasks
 
     @staticmethod
-    def _validate_graph(specs: dict[str, TaskSpec]) -> None:
+    def _validate_graph(specs: dict[str, TaskSpec]) -> tuple[str, ...]:
         remaining = {identifier: len(spec.dependencies) for identifier, spec in specs.items()}
         dependents = {identifier: [] for identifier in specs}
         for identifier, spec in specs.items():
@@ -233,16 +270,17 @@ class Scheduler:
                     raise ValueError(f"Unknown dependency: {dependency}")
                 dependents[dependency].append(identifier)
         ready = deque(identifier for identifier, count in remaining.items() if count == 0)
-        visited = 0
+        order = []
         while ready:
             identifier = ready.popleft()
-            visited += 1
+            order.append(identifier)
             for dependent in dependents[identifier]:
                 remaining[dependent] -= 1
                 if remaining[dependent] == 0:
                     ready.append(dependent)
-        if visited != len(specs):
+        if len(order) != len(specs):
             raise ValueError("Task dependency cycle")
+        return tuple(order)
 
     def _require_session(self) -> None:
         if self._session is None:
@@ -261,7 +299,11 @@ class Scheduler:
         return self._handlers[record.spec.handler]
 
     def _context(self, record: TaskRecord) -> TaskContext:
-        return TaskContext(deepcopy(record.spec), self.root, record.status, tuple(deepcopy(record.attempts)))
+        return TaskContext(deepcopy(record.spec), self.root, record.status, tuple(deepcopy(record.attempts)),
+                           deepcopy(record.result), record.revision)
+
+    def _policy(self, record: TaskRecord) -> Scheduling:
+        return record.spec.execution.resolve(self.policy)
 
     def _has_work(self) -> bool:
         return bool(self._running) or any(record.status in {"pending", "committing"} for record in self._records.values())
@@ -291,16 +333,17 @@ class Scheduler:
     def _finish_tasks(self, devices: list[GPU] | None, now: float) -> bool:
         finished = False
         for identifier, running in list(self._running.items()):
+            record = self._records[identifier]
             if devices is not None and running.gpu is not None:
                 running.missing = 0 if any(gpu.uuid == running.gpu.uuid for gpu in devices) else running.missing + 1
             lost = running.missing >= 2
-            timeout = self.policy.task_timeout_seconds > 0 and now - running.started > self.policy.task_timeout_seconds
+            limit = self._policy(record).task_timeout_seconds
+            timeout = limit > 0 and now - running.started > limit
             code = running.process.poll()
             if code is None and not lost and not timeout:
                 continue
             self.runtime.stop(running.process)
             self._release(identifier, running)
-            record = self._records[identifier]
             if lost or timeout:
                 assessment = Assessment(False, True, "device" if lost else "timeout",
                                         "GPU disappeared" if lost else "task timed out")
@@ -331,7 +374,7 @@ class Scheduler:
         attempt = record.attempts[-1]
         attempt.status, attempt.kind, attempt.message = "failed", assessment.kind, assessment.message
         attempt.retryable = assessment.retryable
-        retry = record.can_retry(self.policy.max_retries)
+        retry = record.can_retry(self._policy(record).max_retries)
         record.status = "pending" if retry else "failed"
         if gpu is not None:
             if assessment.kind == "device":
@@ -376,7 +419,8 @@ class Scheduler:
         try:
             record.status = "running"
             record.attempts.append(Attempt(str(directory), gpu=None if gpu is None else gpu.uuid,
-                                           memory_mib=record.spec.resources.memory_mib))
+                                           memory_mib=record.spec.resources.memory_mib,
+                                           revision=record.revision))
             self._save()
             directory.mkdir(parents=True)
             command = self._handler(record).prepare(self._context(record))
@@ -430,11 +474,14 @@ class Scheduler:
             if record.status not in {"complete", "failed", "blocked"}:
                 continue
             event_id = f"{record.spec.id}:{len(record.attempts)}:{record.status}"
+            if record.revision:
+                event_id = json.dumps((record.spec.id, record.revision, len(record.attempts), record.status),
+                                      separators=(",", ":"))
             for name, listener in self._listeners.items():
                 if record.acknowledged.get(name) == event_id:
                     continue
                 listener(TaskEvent(event_id, deepcopy(record.spec), record.status,
-                                   tuple(deepcopy(record.attempts)), deepcopy(record.result)))
+                                   tuple(deepcopy(record.attempts)), deepcopy(record.result), record.revision))
                 record.acknowledged[name] = event_id
                 self._save()
 
@@ -455,7 +502,8 @@ class Scheduler:
                 pass
             record = self._records[identifier]
             workers.append(WorkerStatus(record.sequence, running.process.pid,
-                "CPU" if running.gpu is None else f"GPU{running.gpu.index}", len(record.attempts),
+                "CPU" if running.gpu is None else f"GPU{running.gpu.index}",
+                sum(attempt.status != "interrupted" for attempt in record.current_attempts),
                 state["current"], state["total"], f"{record.spec.name} {state['phase']}", running.started,
-                state["unit"], record.spec.resources.memory_mib))
+                state["unit"], record.spec.resources.memory_mib, self._policy(record).max_retries + 1))
         progress.render(workers, f"{self.memory.summary()}; {self._event}" if self.memory.devices else self._event)

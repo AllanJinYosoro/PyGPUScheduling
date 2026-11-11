@@ -1,6 +1,6 @@
 [project]
 name = "pygpu-scheduling"
-version = "0.1.0"
+version = "0.2.0"
 description = "Reusable local CPU and NVIDIA GPU task scheduling with dependency graphs and recovery hooks"
 readme = "README.md"
 requires-python = ">=3.11"

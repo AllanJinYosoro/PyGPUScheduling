@@ -18,6 +18,7 @@ class WorkerStatus:
     started: float
     unit: str = "epoch"
     memory_mib: int = 0
+    max_attempts: int | None = None
 
 
 def duration(seconds: float) -> str:
@@ -108,7 +109,7 @@ class TaskProgress:
             budget = f" budget{worker.memory_mib / 1024:g}GiB" if worker.memory_mib else ""
             result.append(
                 f"Slot {index} | {worker.device} PID{worker.pid}{budget} | {self.label} {identifier:03d} | "
-                f"try{worker.attempt}/{self.max_attempts} | {worker.unit}{worker.current}/{worker.total} | "
+                f"try{worker.attempt}/{worker.max_attempts or self.max_attempts} | {worker.unit}{worker.current}/{worker.total} | "
                 f"{worker.phase} | elapsed {duration(now - worker.started)}"
             )
         result.append("Latest: " + " ".join(event.split()))

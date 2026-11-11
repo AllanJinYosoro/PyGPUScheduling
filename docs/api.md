@@ -14,6 +14,8 @@
 | `Scheduling` | GPU 筛选、并发、重试、查询间隔等全局策略 |
 | `TaskSpec` | 稳定 ID、处理器、显示名、JSON 参数、依赖、优先级和资源需求 |
 | `ResourceRequest` | `cpu` 或 `cuda`，以及单进程显存预算 |
+| `ExecutionPolicy` | 部分覆盖队列的重试次数和超时 |
+| `ArtifactHandler` | 带可选执行后、恢复时产物检查的命令处理器模板 |
 | `Command` | 命令参数列表、工作目录和环境变量 |
 | `TaskContext` | 任务、根目录、当前状态、历史尝试以及最近一次的目录与 GPU |
 | `Assessment` | 成功与否、能否重试、失败种类和信息 |
@@ -38,9 +40,21 @@ scheduler.submit_many(tasks)
 records = scheduler.run()
 ```
 
-同一批任务可向前引用依赖；依赖必须存在且不能形成环。批量校验失败时不提交这一批任务。相同 ID 和业务定义可重复提交；改变处理器、参数或依赖会报错。显示名、优先级和资源可以在任务未执行时调整，执行中的任务不能更换定义。
+同一批任务可向前引用依赖；依赖必须存在且不能形成环。批量校验失败时不提交这一批任务。相同 ID 和业务定义可重复提交；改变处理器、参数或依赖会报错。显示名、优先级、资源和执行策略可以在任务未执行时调整，执行中的任务不能更换定义。
 
 同层任务按优先级降序、显存预算降序及提交顺序选择。显存不足时继续尝试后续可放入的小任务。依赖全部 `complete` 后任务才会启动，前置任务最终 `failed` 或 `blocked` 时，下游成为 `blocked`。严格先后关系使用依赖表达。
+
+## 队列默认与任务覆盖
+
+```python
+from task_scheduling import ExecutionPolicy, Scheduling, TaskSpec
+
+defaults = Scheduling(max_retries=3, task_timeout_seconds=3600)
+task = TaskSpec("evaluate", "command", payload={"args": ["python", "evaluate.py"]},
+                execution=ExecutionPolicy(task_timeout_seconds=600))
+```
+
+此任务继承 3 次额外重试，将每次尝试的超时改为 600 秒。两个任务级字段独立覆盖；`None` 表示继承，`0` 分别表示不重试、关闭超时。使用 `ExecutionPolicy(**settings)` 可从配置字典构造。恢复及进度显示使用相同的有效策略；提高预算后可继续此前因预算耗尽而停止的可重试任务。
 
 ## 生命周期处理器
 
@@ -53,11 +67,29 @@ records = scheduler.run()
 | `commit(context)` | 幂等发布产物，返回可序列化的 JSON 对象 |
 | `recover(context)` | 检查旧产物及旧状态，决定恢复或重新执行 |
 
-`context.attempts` 是历史快照，可能为空。`context.directory` 返回最近一次尝试目录，没有尝试时返回调度根目录；`context.gpu` 返回 GPU UUID 或 `None`。
+`context.attempts` 是完整历史快照，`context.current_attempts` 只包含当前修订。`context.directory` 返回当前修订最近一次尝试的目录，没有时返回调度根目录；`context.gpu` 返回 GPU UUID 或 `None`。`context.result` 是已保存业务结果的快照，`context.revision` 是当前修订号。
 
 设备丢失和超时由核心直接判定为可重试失败；普通退出会交给 `assess`，内置处理器以退出码 0 为成功。处理器自身抛错会停止调度并保留现场，不会当成业务失败自动消耗重试预算。
 
 业务产物完整示例见 [`examples/artifacts.py`](../examples/artifacts.py)。
+
+## 可选产物检查
+
+```python
+from task_scheduling import ArtifactHandler
+
+handler = ArtifactHandler(check_attempt=check_worker_files, check_result=check_published_files)
+scheduler.register_handler("checked", handler)
+```
+
+两个函数均接收 `TaskContext` 并返回布尔值，可以使用同一个函数，也可以分别省略。继承 `ArtifactHandler` 可定制命令和幂等发布。
+
+- `check_attempt`：worker 退出码为 0 后、发布前运行。返回 `False` 时任务以不可重试的 `artifact` 错误结束；需要其他重试规则时覆盖现有 `assess`。
+- `check_result`：每次持锁恢复时，检查已保存的 `complete` 任务。返回 `False` 时核心将该任务及所有依赖后继重新排队，独立分支继续复用。原有处理器也可自行实现同名方法，无需继承模板。
+
+恢复检查按依赖顺序、在启动 worker 和交付事件之前完成；上游失效后不检查后继旧产物，也不通过 `recover` 复用这些旧结果。重新排队先原子保存，再启动新的尝试，因此中断后仍会继续重算。核心保留历史、增加修订号、清空当前结果和事件确认，并为新修订重新计算重试预算；不会删除业务文件或改变任务定义。业务的 `commit` 应能幂等替换失效产物。
+
+检查函数应简短；耗时的质量检验放在 worker 中。函数抛错会停止恢复并保留原状态，不能用异常代表产物不合格。没有注册恢复检查时，核心信任保存的完成状态。
 
 ## 状态与恢复
 
@@ -70,9 +102,11 @@ records = scheduler.run()
 - `Recovery("failed")`：业务确认永久失败。
 - `None`：按已保存的失败次数及可重试标记重新排队。
 
-已有 `complete` 或 `committing` 状态无法恢复时应抛错，不能静默覆盖已发布结果。业务自己定义数据身份、文件校验及发布流程。内置命令处理器仅依靠保存的成功状态恢复，不检查业务文件。
+未被产物检查判为失效的 `complete` 或 `committing` 状态无法恢复时仍会报错。`recover` 负责中断现场的恢复；已发布结果失效由 `check_result` 表达。业务自己定义数据身份、文件校验及发布流程。
 
-`scheduler.json` 当前格式版本为 1，保存任务定义、尝试与事件确认信息；`scheduler.lock` 防止同一运行目录被重复调度。每次尝试目录包含 `worker.log`，以及 worker 选择上报的 `progress.json`。保留完整运行目录，并在恢复时重新注册同名处理器和订阅者。Python 函数、对象和闭包不写入状态文件。
+`scheduler.json` 当前格式版本为 2，新增任务执行策略及任务、尝试的修订号。可直接读取版本 1，缺失策略按继承处理，旧任务及尝试属于修订 0；下次保存写为版本 2。修订 0 保持旧事件 ID 和确认记录，避免重复交付。0.1.x 不能读取版本 2，回退需恢复升级前的状态备份。
+
+`scheduler.lock` 防止同一运行目录被重复调度。每次尝试目录包含 `worker.log`，以及 worker 选择上报的 `progress.json`。保留完整运行目录，并在恢复时重新注册同名处理器和订阅者。Python 函数、对象和闭包不写入状态文件。
 
 `with Scheduler(...) as scheduler` 可显式控制锁持有范围；`reconcile()` 在持锁会话中恢复任务。`import_records()` 用于调用方迁入已有通用记录，只允许在尚无状态的新调度器中导入。状态包含绝对尝试路径，当前不承诺运行目录搬迁后仍可恢复。
 
@@ -81,6 +115,8 @@ records = scheduler.run()
 `subscribe(name, listener)` 接收 `complete`、`failed`、`blocked` 终态事件。订阅回调可继续提交任务；新任务必须使用稳定 ID。
 
 事件按至少一次语义交付：回调成功返回后才保存确认信息，期间中断会重复投递相同事件 ID。调用方按事件 ID 幂等更新业务状态。`observe(callback)` 提供通用状态快照，适合导出报告，不具有终态事件的确认语义。
+
+重算后的事件包含新的 `revision`，事件 ID 也随之变化；同一修订内重放保持 ID 不变。计算正常完成但业务不接受结果时，可在 `commit` 返回接受标记，由订阅者注册稳定 ID 的新任务；不需要增加业务专用失败类型。
 
 ## 策略默认值
 

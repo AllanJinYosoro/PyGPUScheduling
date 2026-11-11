@@ -1,9 +1,25 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 
 def integer(value: int, name: str, minimum: int = 0) -> None:
     if type(value) is not int or value < minimum:
         raise ValueError(f"{name} must be an integer >= {minimum}")
+
+
+@dataclass(frozen=True)
+class ExecutionPolicy:
+    max_retries: int | None = None
+    task_timeout_seconds: int | None = None
+
+    def __post_init__(self) -> None:
+        for name in self.__dataclass_fields__:
+            value = getattr(self, name)
+            if value is not None:
+                integer(value, name)
+
+    def resolve(self, defaults: "Scheduling") -> "Scheduling":
+        return replace(defaults, **{name: getattr(self, name) for name in self.__dataclass_fields__
+                                    if getattr(self, name) is not None})
 
 
 @dataclass(frozen=True)
